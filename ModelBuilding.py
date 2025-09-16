@@ -1,23 +1,24 @@
 # ModelBuilding.py — 3-page Streamlit app (Welcome / Dashboard / Predictor)
 # - English-only normalization
-# - Trains many linear baselines (TF-IDF word+char)
-# - Caches artifacts to ./model_cache so you don't retrain every edit
+# - Trains classic linear baselines (TF-IDF word+char)
+# - Caches artifacts to ./model_cache so you don’t retrain every edit
 # - Dashboard: leaderboard, confusion matrix, per-class F1, learning curve (Train vs Test)
 # - Predictor: probability bar chart (when model exposes probabilities)
-# streamlit run ModelBuilding.py
+# Run locally: streamlit run ModelBuilding.py
 
 import warnings
 warnings.filterwarnings("ignore")
 
-import os, re, sys, hashlib
+import os, re, sys, hashlib, shutil, io
 from pathlib import Path
-from typing import Dict, Any
-import py7zr
+from typing import Dict, Any, Tuple
+
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import joblib
 import sklearn
+import py7zr  # <-- needed for .7z extraction
 
 from collections import Counter
 
@@ -32,12 +33,37 @@ from sklearn.naive_bayes import MultinomialNB, ComplementNB
 from sklearn.svm import LinearSVC
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.metrics import (
-    classification_report, confusion_matrix, f1_score, accuracy_score,
-    precision_score, recall_score
+    classification_report, confusion_matrix,
+    f1_score, accuracy_score, precision_score, recall_score
 )
 
 import streamlit as st
 
+# ---------- GLOBAL MATPLOTLIB STYLE ----------
+plt.style.use("seaborn-v0_8-whitegrid")
+plt.rcParams.update({
+    "figure.autolayout": True,
+    "figure.facecolor": "white",
+    "axes.facecolor": "white",
+    "axes.titleweight": "bold",
+    "axes.titlelocation": "left",
+    "axes.labelweight": "semibold",
+    "axes.grid": True,
+    "grid.alpha": 0.25,
+    "font.size": 11,
+})
+
+# ---------------- CONFIG ----------------
+CACHE_VERSION = 12                     # bump to refresh Streamlit's in-memory cache
+PAGES = ["Welcome", "Dashboard", "Predictor"]
+
+# Disk cache for model artifacts (survives code/UI changes)
+MODEL_CACHE_DIR = Path("./model_cache")
+MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+# If you change training logic / features / hyperparams, bump this tag:
+MODEL_CODE_TAG = "v4-eng-only-tfidf(word+char)-oversample-balanced-top3-learningcurve"
+
+# ---------------- Dataset ensure/extract (.7z) ----------------
 DATA_DIR = Path("data")
 CSV = DATA_DIR / "CleanCombineData_featured.csv"
 SEVENZ = DATA_DIR / "CleanCombineData_featured.7z"
@@ -55,32 +81,6 @@ def ensure_dataset() -> str:
     return str(CSV)
 
 DATA_PATH = ensure_dataset()
-
-# ---------- GLOBAL MATPLOTLIB STYLE ----------
-plt.style.use("seaborn-v0_8-whitegrid")
-plt.rcParams.update({
-    "figure.autolayout": True,
-    "figure.facecolor": "white",
-    "axes.facecolor": "white",
-    "axes.titleweight": "bold",
-    "axes.titlelocation": "left",
-    "axes.labelweight": "semibold",
-    "axes.grid": True,
-    "grid.alpha": 0.25,
-    "font.size": 11,
-})
-
-# ---------------- CONFIG ----------------
-CACHE_VERSION = 11                     # bump to refresh Streamlit in-memory cache
-DATA_PATH = "data/CleanCombineData_featured.csv"
-PAGES = ["Welcome", "Dashboard", "Predictor"]
-
-# Disk cache (survives code changes)
-MODEL_CACHE_DIR = Path("./model_cache")
-MODEL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-# Bump when you change training logic, features, or hyperparams
-MODEL_CODE_TAG = "v5-eng-only-tfidf(word+char)-oversample-top3-learningcurve"
-
 
 # -------- Column detection (skip obvious metadata) --------
 LIKELY_META = {"id","ids","index","idx","user","username","name","handle","screen_name",
@@ -207,7 +207,7 @@ def compute_all_models(csv_path: str, seed: int = 42):
     results.sort(key=lambda d: d["f1_macro"], reverse=True)
     return results, classes, np.array(Xtr_bal), np.array(ytr_bal), np.array(Xte), np.array(yte), X_full, y_full
 
-# ---------------- Learning curve (Train vs Test) ----------------
+# ---------------- Learning curve (Train vs Test, no epochs) ----------------
 def precompute_learning_curves(top_results: list, X: np.ndarray, y: np.ndarray, seed: int = 42):
     curves = {}
     cv = StratifiedKFold(n_splits=3, shuffle=True, random_state=seed)
@@ -335,6 +335,7 @@ def plot_confusion(cm, classes, title):
     plt.xticks(ticks, classes, rotation=45, ha="right")
     plt.yticks(ticks, classes)
     plt.xlabel("Predicted"); plt.ylabel("True")
+    # annotate
     vmax = cm.max() if cm.size else 1
     for i in range(cm.shape[0]):
         for j in range(cm.shape[1]):
@@ -351,9 +352,10 @@ def plot_f1_bars(report_dict, classes, title):
     plt.yticks(y, [classes[i] for i in order])
     plt.xlim(0, 1.0)
     plt.xlabel("F1-score"); plt.title(title)
+    # annotate values
     for i, v in enumerate(vals[order]):
-        plt.text(v + 0.01 if v < 0.95 else 0.95, i, f"{v:.2f}",
-                 va="center", ha="left" if v < 0.95 else "right")
+        plt.text(v + 0.01 if v < 0.95 else 0.95, i, f"{v:.2f}", va="center",
+                 ha="left" if v < 0.95 else "right")
     return fig
 
 # ---------- Probability utilities ----------
@@ -365,7 +367,7 @@ def _class_probabilities(pipe: Pipeline, text: str):
         try:
             scores = pipe.decision_function([text])
             s = np.asarray(scores)[0]
-            if np.ndim(s) == 0:  # binary
+            if np.ndim(s) == 0:
                 s = np.array([-s, s])
             e = np.exp(s - np.max(s))
             return e / e.sum()
@@ -374,11 +376,10 @@ def _class_probabilities(pipe: Pipeline, text: str):
 
 def plot_probability_bars(classes, proba, predicted_index):
     dfp = pd.DataFrame({"Class": classes, "Probability": proba})
-    dfp = dfp.sort_values("Probability", ascending=True)  # for horizontal plot
-
+    dfp = dfp.sort_values("Probability", ascending=True)
     base = np.array([0.45, 0.67, 0.89, 1.0])  # soft blue
-    muted = np.array([0.80, 0.86, 0.93, 1.0]) # light bar
-    colors = [tuple(base) if classes[predicted_index]==cls else tuple(muted) for cls in dfp["Class"]]
+    muted = np.array([0.80, 0.86, 0.93, 1.0]) # light bars
+    colors = [tuple(base) if classes[predicted_index] == cls else tuple(muted) for cls in dfp["Class"]]
 
     fig = plt.figure(figsize=(7.6, 5))
     y = np.arange(len(dfp))
@@ -399,10 +400,13 @@ def inject_css():
         <style>
         .main .block-container { padding-top: 1rem; padding-bottom: 2rem; max-width: 1200px; }
         h1, h2 { letter-spacing: .3px; }
-        h1 { font-weight: 800; }  h2 { font-weight: 700; }
+        h1 { font-weight: 800; }
+        h2 { font-weight: 700; }
         .pill-row { margin: 8px 0 12px 0; display: flex; gap: 8px; }
         .pill-row button[kind="primary"] {
-            border-radius: 999px !important; padding: .55rem 1.1rem !important; font-weight: 700 !important;
+            border-radius: 999px !important;
+            padding: .55rem 1.1rem !important;
+            font-weight: 700 !important;
         }
         .pill-row button { border-radius: 999px !important; padding: .55rem 1.1rem !important; }
         .stAlert > div { border-radius: 12px; }
@@ -413,6 +417,7 @@ def inject_css():
 
 def render_top_nav():
     """Top pill button bar to switch pages and keep URL in sync; defaults to Welcome."""
+    # init nav from query param or default
     if "nav" not in st.session_state or st.session_state.get("_nav_ver") != CACHE_VERSION:
         st.session_state["nav"] = "Welcome"
         st.session_state["_nav_ver"] = CACHE_VERSION
@@ -428,14 +433,14 @@ def render_top_nav():
         st.session_state["nav"] = page_name
         st.query_params["page"] = page_name
 
-    c1, c2, c3 = st.columns([1,1,1])
-    with c1:
+    col1, col2, col3 = st.columns([1,1,1])
+    with col1:
         st.button("🏠  Welcome", use_container_width=True,
                   on_click=lambda: go("Welcome"), key="btn_welcome")
-    with c2:
+    with col2:
         st.button("📊  Dashboard", use_container_width=True,
                   on_click=lambda: go("Dashboard"), key="btn_dashboard")
-    with c3:
+    with col3:
         st.button("🔎  Predictor", use_container_width=True,
                   on_click=lambda: go("Predictor"), key="btn_predictor")
     st.markdown("---")
@@ -443,66 +448,26 @@ def render_top_nav():
 # ---------------- UI Pages ----------------
 def page_welcome():
     st.title("Mental Health Sentiment — Research Prototype")
-
     st.markdown(
         """
-        ### What this app does
-        - Trains a suite of classic linear text classifiers (**LogReg**, **LinearSVM**, **SGD**, **Passive-Aggressive**, **Ridge**, **Naive Bayes**) on *your* dataset.  
-        - Uses a lightweight **English-only** preprocessor and **TF-IDF** features (**word 1–3-grams** + **char 3–6-grams**).  
-        - Handles class imbalance via **simple oversampling** on the training split.  
-        - Compares models with **Accuracy**, **Macro-Precision**, **Macro-Recall**, and **Macro-F1** (*primary*).  
-        - Precomputes **learning curves** (Train vs Test Macro-F1) for the **Top-3** models.
+        This app trains and compares several **classic linear text classifiers** on your
+        English mental-health posts dataset (TF-IDF features), then lets you **interactively
+        inspect** the results and try a **live predictor**.
+
+        **What’s inside**
+        - Leaderboard (Macro-F1, Accuracy, Precision, Recall)
+        - Confusion matrix and per-class F1 for a selected top model
+        - Learning curve (Train vs Test CV) for the Top-3 models
+        - A predictor that uses the **best model** and shows a probability bar chart
+        - Disk cache in `./model_cache/` to avoid retraining on every edit
+
+        Use the buttons above to switch pages.
         """
     )
-
-    st.markdown(
-        """
-        ### How to use
-        1. Open **Dashboard** → review the leaderboard, confusion matrix, per-class F1, and learning curve.  
-        2. Use the selector to switch among the **Top-3** models.  
-        3. Go to **Predictor** → type English text and view the predicted label with a probability bar chart.
-        """
-    )
-
-    st.markdown(
-        f"""
-        ### Under the hood
-        - **Vectorizer:** TF-IDF (word + char), sublinear TF; simple normalizer.  
-        - **Split:** 80/20 stratified train/test; oversampling only on train.  
-        - **Caching:** Model artifacts saved to `./model_cache/` and reused across runs.  
-        - **Dataset path:** `{DATA_PATH}`
-        """
-    )
-
-    with st.expander("Metric cheat-sheet"):
-        st.markdown(
-            """
-            - **Accuracy** — overall fraction of correct predictions.  
-            - **Macro-Precision** — average precision across classes.  
-            - **Macro-Recall** — average recall across classes.  
-            - **Macro-F1** — average F1 across classes; our main ranking metric.  
-            """
-        )
-
-    with st.expander("Limitations & scope"):
-        st.markdown(
-            """
-            - **English-only** prototype; not a clinical tool.  
-            - Small or imbalanced datasets can make metrics unstable—use the learning curve to judge bias/variance.  
-            """
-        )
-
-    with st.expander("Reproducibility & re-training"):
-        st.markdown(
-            """
-            - To **force retrain**, delete files in `model_cache/` *or* bump `MODEL_CODE_TAG` in this script.  
-            - Prebuild without UI:
-              ```bash
-              python app_sentiment.py --precompute
-              ```
-            - Record for your FYP: Python & scikit-learn versions, TF-IDF settings, class rebalance method,
-              random seeds, and fixed train/test indices.  
-            """
+    with st.expander("Repro tips", expanded=False):
+        st.write(
+            "- To force retrain, delete files in `model_cache/` or bump `MODEL_CODE_TAG`.\n"
+            "- You can also precompute locally using `python ModelBuilding.py --precompute`."
         )
 
 def page_dashboard(data: Dict[str, Any]):
@@ -515,7 +480,7 @@ def page_dashboard(data: Dict[str, Any]):
     st.dataframe(styled, use_container_width=True)
 
     # Tabs for visuals
-    top3 = data["results"][:min(3, len(data["results"]))]
+    top3 = data["results"][:min(3, len(data["results"]))]  # already sorted
     names = [r["name"] for r in top3]
     pick = st.selectbox("Select a top model to inspect", options=names, index=0)
     r = next(x for x in top3 if x["name"] == pick)
@@ -573,9 +538,6 @@ def main():
     with st.spinner("Preparing models and dashboard (first run only)…"):
         data = build_app_data(DATA_PATH, CACHE_VERSION)
 
-    # Top navigation
-    if "nav" not in st.session_state:
-        st.session_state["nav"] = "Welcome"
     render_top_nav()
 
     page = st.session_state.get("nav", "Welcome")
