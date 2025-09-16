@@ -12,7 +12,7 @@ warnings.filterwarnings("ignore")
 import os, re, sys, hashlib
 from pathlib import Path
 from typing import Dict, Any
-
+import py7zr
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -38,6 +38,24 @@ from sklearn.metrics import (
 
 import streamlit as st
 
+DATA_DIR = Path("data")
+CSV = DATA_DIR / "CleanCombineData_featured.csv"
+SEVENZ = DATA_DIR / "CleanCombineData_featured.7z"
+
+def ensure_dataset() -> str:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    if not CSV.exists():
+        if SEVENZ.exists():
+            with py7zr.SevenZipFile(SEVENZ, mode="r") as z:
+                z.extractall(path=DATA_DIR)
+        else:
+            raise FileNotFoundError(
+                f"Dataset not found. Put {CSV.name} or {SEVENZ.name} in {DATA_DIR}/"
+            )
+    return str(CSV)
+
+DATA_PATH = ensure_dataset()
+
 # ---------- GLOBAL MATPLOTLIB STYLE ----------
 plt.style.use("seaborn-v0_8-whitegrid")
 plt.rcParams.update({
@@ -54,7 +72,7 @@ plt.rcParams.update({
 
 # ---------------- CONFIG ----------------
 CACHE_VERSION = 11                     # bump to refresh Streamlit in-memory cache
-DATA_PATH = r"C:\Users\Kai\Downloads\FYP Coding\CleanCombineData_featured.csv"
+DATA_PATH = "data/CleanCombineData_featured.csv"
 PAGES = ["Welcome", "Dashboard", "Predictor"]
 
 # Disk cache (survives code changes)
