@@ -1,0 +1,116 @@
+{
+  "best_model": "LogReg_C2.0",
+  "top3": [
+    "LogReg_C2.0",
+    "LogReg_C1.0",
+    "LinearSVM_C0.5"
+  ],
+  "models": [
+    {
+      "name": "LogReg_C2.0",
+      "metrics": {
+        "macro_f1": 0.7072400217521034,
+        "accuracy": 0.7573644933228594,
+        "precision": 0.694628858447803,
+        "recall": 0.72417716385032
+      }
+    },
+    {
+      "name": "LogReg_C1.0",
+      "metrics": {
+        "macro_f1": 0.7032598184449521,
+        "accuracy": 0.7569717203456402,
+        "precision": 0.6861762880422136,
+        "recall": 0.7269698139963434
+      }
+    },
+    {
+      "name": "LinearSVM_C0.5",
+      "metrics": {
+        "macro_f1": 0.6994542366786514,
+        "accuracy": 0.7503927729772192,
+        "precision": 0.7011071289829778,
+        "recall": 0.7012074248807476
+      }
+    },
+    {
+      "name": "LinearSVM_C1.0",
+      "metrics": {
+        "macro_f1": 0.6955646012119147,
+        "accuracy": 0.747643362136685,
+        "precision": 0.700859838413482,
+        "recall": 0.6935448286889895
+      }
+    },
+    {
+      "name": "LinearSVM_C2.0",
+      "metrics": {
+        "macro_f1": 0.6923832957102202,
+        "accuracy": 0.7450903377847604,
+        "precision": 0.699865882995964,
+        "recall": 0.6884335103071166
+      }
+    },
+    {
+      "name": "SGD_Hinge",
+      "metrics": {
+        "macro_f1": 0.6919197366151199,
+        "accuracy": 0.7465632364493323,
+        "precision": 0.6731094496834834,
+        "recall": 0.7264580168268886
+      }
+    },
+    {
+      "name": "PassiveAggressive",
+      "metrics": {
+        "macro_f1": 0.6878971558975396,
+        "accuracy": 0.7436174391201885,
+        "precision": 0.7076461154307637,
+        "recall": 0.6758831311852045
+      }
+    },
+    {
+      "name": "RidgeClassifier",
+      "metrics": {
+        "macro_f1": 0.6864928711604241,
+        "accuracy": 0.7337981146897093,
+        "precision": 0.7118988696693088,
+        "recall": 0.6727629621828416
+      }
+    },
+    {
+      "name": "SGD_Log",
+      "metrics": {
+        "macro_f1": 0.6704313442806822,
+        "accuracy": 0.7305577376276512,
+        "precision": 0.6429832703014994,
+        "recall": 0.7254115063811126
+      }
+    },
+    {
+      "name": "ComplementNB",
+      "metrics": {
+        "macro_f1": 0.46639184894967495,
+        "accuracy": 0.5086410054988216,
+        "precision": 0.4943761374601698,
+        "recall": 0.6379229040401568
+      }
+    },
+    {
+      "name": "MultinomialNB",
+      "metrics": {
+        "macro_f1": 0.3647609385120211,
+        "accuracy": 0.40298507462686567,
+        "precision": 0.4531918649332865,
+        "recall": 0.5423349753344305
+      }
+    }
+  ],
+  "meta": {
+    "dataset_path": "C:\\Users\\Kai\\Downloads\\FYP Coding\\CleanCombineData_featured.csv",
+    "dataset_fp": "915c6e6564fbbf188fe772c63525b738c35e30be",
+    "sklearn": "1.7.1",
+    "python": "3.13",
+    "code_tag": "v5-eng-only-tfidf(word+char)-oversample-top3-learningcurve"
+  }
+}
